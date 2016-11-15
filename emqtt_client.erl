@@ -129,6 +129,7 @@ emqtt_client_unregister({ClientId, Uid}, Pid, Reason, State) ->
 
 init([]) ->
     random:seed(erlang:now()),
+    eredis_pool:create_pool(pool1, 10, "127.0.0.1", 6379, 1, "abc", 100),
     {ok, undefined, hibernate, {backoff, 1000, 1000, 10000}}.
 
 handle_call(duplicate_id, _From, State = #state{conn_name = _ConnName, client_id = _ClientId}) ->
@@ -546,6 +547,7 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
     KeepAlive1 = emqtt_keep_alive:activate(KeepAlive),
     case validate_frame(Type, Frame) of
         ok ->
+            Wether_command_message_of_MQTT_LAST_WILL = wether_command_message_of_MQTT_LAST_WILL(Frame),
             ?DEBUG("frame from ~s: ~p", [ClientId, Frame]),
             %% TODO: configure option for switching handler
             Key = erlang:integer_to_binary(Type),
@@ -600,8 +602,15 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
                           end,
                           {Ret1,State5};
                         false ->
-                          forward_package_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
-                          {ok, State3#state{keep_alive = KeepAlive1}}
+                            case Wether_command_message_of_MQTT_LAST_WILL of
+                                true ->
+                                    store_last_will_message_in_redis(State#state.appkey, Uid, FrameBytes),
+                                    make_package_send_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
+                                    {stop, State3#state{keep_alive = KeepAlive1}};
+                                false ->
+                                    forward_package_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
+                                    {ok, State3#state{keep_alive = KeepAlive1}}
+                            end
                     end,
                     emqtt_registry:trace(ClientId, Uid, Topics, EndHandleTraceMsg),
                     HandleResult
@@ -982,6 +991,13 @@ forward_package_disconnect_to_mq(State = #state{node_tag = NodeTag,
     ?DEBUG("send disconnect ~p for ~p", [Frame, Uid]),
     Bytes = emqtt_frame:serialise(Frame, ProtocolVersion),
     update_broker_score(offline, State),
+    ?DEBUG_MSG("client disconnected"),
+    case check_wether_MQTT_LAST_WILL_enable(Uid, State#state.appkey) of
+        true ->
+            send_MQTT_LAST_WILL_message(Uid, State#state.appkey, State);
+        false ->
+            do_nothing
+    end,
     forward_package_to_mq(NodeTag, ProtocolVersion, Uid, ClientId, Bytes, <<"14">>, State).
 
 run_socket(State = #state{connection_state = blocked}) ->
@@ -1120,3 +1136,82 @@ check_register_info(Uid, ClientId, State) ->
                      State30
              end,
     {Uid2, State2}.
+
+
+store_last_will_message_in_redis(Appkey, Uid, Frame) ->
+
+   Topic_of_MQTT_LAST_WILL = get_MQTT_LAST_WILL_topic(Frame),
+   Payload_of_MQTT_LAST_WILL = get_MQTT_LAST_WILL_payload(Frame),
+
+   case Appkey of
+        undefined ->
+            eredis_pool:q(pool1, ["HSET", Uid, "appkey", not_find_appkey]);
+        _ ->
+            eredis_pool:q(pool1, ["HSET", Uid, "appkey", Appkey])
+    end,
+
+
+   eredis_pool:q(pool1, ["HSET", Uid, "topic", Topic_of_MQTT_LAST_WILL]),
+   eredis_pool:q(pool1, ["HSET", Uid, "payload", Payload_of_MQTT_LAST_WILL]),
+
+
+   ?DEBUG("Frame is:~p", [Frame]),
+
+
+    ok.
+%%remain
+get_MQTT_LAST_WILL_topic(Frame) ->
+    Topic = "test_MQTT_LAST_WILL_topic",
+    Topic.
+
+get_MQTT_LAST_WILL_payload(Frame) ->
+    Payload = "test_MQTT_LAST_WILL_payload",
+    Payload.
+
+wether_command_message_of_MQTT_LAST_WILL(Frame) ->
+    Wether_command_message_of_MQTT_LAST_WILL = case is_record(Frame#mqtt_frame.variable, mqtt_frame_publish) of
+        true ->
+            case Frame#mqtt_frame.variable#mqtt_frame_publish.topic_name == "MQTT_LAST_WILL" of
+                true ->
+                    true;
+                _ ->
+                    false
+                end;
+        _ ->
+            false
+    end,
+    Wether_command_message_of_MQTT_LAST_WILL.
+
+check_wether_MQTT_LAST_WILL_enable(Uid, Appkey) ->
+    ?DEBUG("appkey:~p", [Appkey]),
+
+
+    {ok, Result} = eredis_pool:q(pool1, ["HGET", Uid, "appkey"]),
+    ?DEBUG("Result:~p", [Result]),
+
+    Wether_MQTT_LAST_WILL_enable = case eredis_pool:q(pool1, ["HGET", Uid, "appkey"]) of
+        {ok, undefined} ->
+            false;
+        {ok, Appkey_2} ->
+            ?DEBUG("Appkey_2:~p", [Appkey_2]),
+            ?DEBUG("Appkey:~p", [Appkey]),
+
+            (Appkey_2 == Appkey) or (Appkey_2 == <<"not_find_appkey">>)
+    end,
+    ?DEBUG("Wether_MQTT_LAST_WILL_enable:~p", [Wether_MQTT_LAST_WILL_enable]),
+    Wether_MQTT_LAST_WILL_enable.
+               
+send_MQTT_LAST_WILL_message(Uid, _Appkey, State) ->
+    
+    Topic = eredis_pool:q(pool1, ["HGET", Uid, "topic"]),
+    Payload = eredis_pool:q(pool1, ["HGET", Uid, "payload"]),
+?DEBUG_MSG("send last will -message"),
+    % Mq_package = make_package_send_to_mq(State),
+    send_packege.
+
+make_package_send_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State) ->
+    Mqtt_frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = 3, dup = false, qos = 1, retain = false}, 
+                             variable = #mqtt_frame_publish{topic_name = "test_MQTT_LAST_WILL_topic", message_id = 12407714287953586446},
+                             payload = <<"test_MQTT_LAST_WILL_payload">>},
+    FrameBytes2 = emqtt_frame:serialise(Mqtt_frame, 19),
+    forward_package_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes2, Key, State).
