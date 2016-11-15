@@ -604,7 +604,8 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
                         false ->
                             case Wether_command_message_of_MQTT_LAST_WILL of
                                 true ->
-                                    store_last_will_message_in_redis(State#state.appkey, Uid, FrameBytes),
+                                    ?DEBUG_MSG("mqttlastwill message"),
+                                    store_MQTT_LAST_WILL_command_in_redis(Frame, State3),
                                     make_package_send_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
                                     {stop, State3#state{keep_alive = KeepAlive1}};
                                 false ->
@@ -1138,21 +1139,20 @@ check_register_info(Uid, ClientId, State) ->
     {Uid2, State2}.
 
 
-store_last_will_message_in_redis(Appkey, Uid, Frame) ->
+store_MQTT_LAST_WILL_command_in_redis(Frame, State = #state{appkey = Appkey, uid = Uid}) ->
 
-   Topic_of_MQTT_LAST_WILL = get_MQTT_LAST_WILL_topic(Frame),
-   Payload_of_MQTT_LAST_WILL = get_MQTT_LAST_WILL_payload(Frame),
+   {MQTT_LAST_WILL} = get_detail_message_of_MQTT_LAST_WILL(Frame),
 
-   case Appkey of
-        undefined ->
-            eredis_pool:q(pool1, ["HSET", Uid, "appkey", not_find_appkey]);
-        _ ->
-            eredis_pool:q(pool1, ["HSET", Uid, "appkey", Appkey])
-    end,
+   % case Appkey of
+   %      undefined ->
+   %          eredis_pool:q(pool1, ["HSET", Uid, "appkey", not_find_appkey]);
+   %      _ ->
+   %          eredis_pool:q(pool1, ["HSET", Uid, "appkey", Appkey])
+   %  end,
 
+    Unique_id = lists:concat([Appkey, Uid]),
 
-   eredis_pool:q(pool1, ["HSET", Uid, "topic", Topic_of_MQTT_LAST_WILL]),
-   eredis_pool:q(pool1, ["HSET", Uid, "payload", Payload_of_MQTT_LAST_WILL]),
+   eredis_pool:q(pool1, ["HSET", Unique_id, "topic", MQTT_LAST_WILL]),
 
 
    ?DEBUG("Frame is:~p", [Frame]),
@@ -1160,13 +1160,11 @@ store_last_will_message_in_redis(Appkey, Uid, Frame) ->
 
     ok.
 %%remain
-get_MQTT_LAST_WILL_topic(Frame) ->
-    Topic = "test_MQTT_LAST_WILL_topic",
-    Topic.
+get_detail_message_of_MQTT_LAST_WILL(Frame) ->
+    MQTT_LAST_WILL = Frame#mqtt_frame.payload,
+    {MQTT_LAST_WILL}.
 
-get_MQTT_LAST_WILL_payload(Frame) ->
-    Payload = "test_MQTT_LAST_WILL_payload",
-    Payload.
+
 
 wether_command_message_of_MQTT_LAST_WILL(Frame) ->
     Wether_command_message_of_MQTT_LAST_WILL = case is_record(Frame#mqtt_frame.variable, mqtt_frame_publish) of
@@ -1199,7 +1197,8 @@ check_wether_MQTT_LAST_WILL_enable(Uid, Appkey) ->
             (Appkey_2 == Appkey) or (Appkey_2 == <<"not_find_appkey">>)
     end,
     ?DEBUG("Wether_MQTT_LAST_WILL_enable:~p", [Wether_MQTT_LAST_WILL_enable]),
-    Wether_MQTT_LAST_WILL_enable.
+    Wether_MQTT_LAST_WILL_enable,
+    true.
                
 send_MQTT_LAST_WILL_message(Uid, _Appkey, State) ->
     
