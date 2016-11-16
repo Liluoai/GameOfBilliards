@@ -110,6 +110,13 @@ emqtt_client_unregister({ClientId, Uid}, Pid, Reason, State) ->
                             ?DEBUG("Do not send disconnect command for ~p", [Reason]),
                             ignore;
                           _ ->
+                          %%todo:last will would work only if client disconnect brutly rather gentely
+                            case check_wether_MQTT_LAST_WILL_enable(Uid, State#state.appkey) of
+                                true ->
+                                    send_MQTT_LAST_WILL_message(Uid, State#state.appkey, State);
+                                false ->
+                                    ignore
+                            end,
                             forward_package_disconnect_to_mq(State)
                         end;
                       true ->
@@ -993,13 +1000,6 @@ forward_package_disconnect_to_mq(State = #state{node_tag = NodeTag,
     ?DEBUG("send disconnect ~p for ~p", [Frame, Uid]),
     Bytes = emqtt_frame:serialise(Frame, ProtocolVersion),
     update_broker_score(offline, State),
-    ?DEBUG_MSG("client disconnected"),
-    case check_wether_MQTT_LAST_WILL_enable(Uid, State#state.appkey) of
-        true ->
-            send_MQTT_LAST_WILL_message(Uid, State#state.appkey, State);
-        false ->
-            do_nothing
-    end,
     forward_package_to_mq(NodeTag, ProtocolVersion, Uid, ClientId, Bytes, <<"14">>, State).
 
 run_socket(State = #state{connection_state = blocked}) ->
@@ -1199,24 +1199,17 @@ wether_command_message_of_MQTT_LAST_WILL(Frame) ->
     Wether_command_message_of_MQTT_LAST_WILL.
 
 check_wether_MQTT_LAST_WILL_enable(Uid, Appkey) ->
-    ?DEBUG("appkey:~p", [Appkey]),
-
-
-    {ok, Result} = eredis_pool:q(pool1, ["HGET", Uid, "appkey"]),
+    Unique_id = lists:concat([Appkey, Uid]),
+    {ok, Result} = eredis_pool:q(pool1, ["HLEN", Unique_id]),
     ?DEBUG("Result:~p", [Result]),
-
-    Wether_MQTT_LAST_WILL_enable = case eredis_pool:q(pool1, ["HGET", Uid, "appkey"]) of
-        {ok, undefined} ->
-            false;
-        {ok, Appkey_2} ->
-            ?DEBUG("Appkey_2:~p", [Appkey_2]),
-            ?DEBUG("Appkey:~p", [Appkey]),
-
-            (Appkey_2 == Appkey) or (Appkey_2 == <<"not_find_appkey">>)
+    Wether_MQTT_LAST_WILL_enable = case eredis_pool:q(pool1, ["HLEN", Unique_id]) of
+        {ok, <<"4">>} ->
+            true;
+        _ ->
+            false
     end,
     ?DEBUG("Wether_MQTT_LAST_WILL_enable:~p", [Wether_MQTT_LAST_WILL_enable]),
-    Wether_MQTT_LAST_WILL_enable,
-    false.
+    Wether_MQTT_LAST_WILL_enable.
                
 send_MQTT_LAST_WILL_message(Uid, _Appkey, State) ->
     
