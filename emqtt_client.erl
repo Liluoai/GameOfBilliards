@@ -605,7 +605,7 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
                         false ->
                             case Wether_command_message_of_MQTT_LAST_WILL of
                                 true ->
-                                    ?DEBUG_MSG("start stroe last will message"),
+                                    ?DEBUG_MSG("start store last will message"),
                                     store_MQTT_LAST_WILL_command_in_redis(Frame, State3),
                                     % make_package_send_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
                                     {stop, State3#state{keep_alive = KeepAlive1}};
@@ -1142,26 +1142,15 @@ check_register_info(Uid, ClientId, State) ->
 
 store_MQTT_LAST_WILL_command_in_redis(Frame, State = #state{appkey = Appkey, uid = Uid}) ->
 
-   {MQTT_LAST_WILL} = get_detail_message_of_MQTT_LAST_WILL(Frame),
-
-   % case Appkey of
-   %      undefined ->
-   %          eredis_pool:q(pool1, ["HSET", Uid, "appkey", not_find_appkey]);
-   %      _ ->
-   %          eredis_pool:q(pool1, ["HSET", Uid, "appkey", Appkey])
-   %  end,
-
-% MQTT_LAST_WILL = test_MQTT_LAST_WILL_payload,
+    {Topic, Payload, Qos, Retain} = get_detail_message_of_MQTT_LAST_WILL(Frame),
     Unique_id = lists:concat([Appkey, Uid]),
-?DEBUG("~p", [Unique_id]),
-   eredis_pool:q(pool1, ["HSET", Unique_id, "topic", MQTT_LAST_WILL]),
-
-
-   ?DEBUG("Frame is:~p", [Frame]),
-
-
+    ?DEBUG("~p", [Unique_id]),
+    eredis_pool:q(pool1, ["HSET", Unique_id, "topic", Topic]),
+    eredis_pool:q(pool1, ["HSET", Unique_id, "payload", Payload]),
+    eredis_pool:q(pool1, ["HSET", Unique_id, "qos", Qos]),
+    eredis_pool:q(pool1, ["HSET", Unique_id, "retain", Retain]),
     ok.
-%%remain
+
 get_detail_message_of_MQTT_LAST_WILL(Frame) ->
     Detail_message_of_MQTT_LAST_WILL = binary_to_list(Frame#mqtt_frame.payload),
     %add erro handle
@@ -1170,7 +1159,8 @@ get_detail_message_of_MQTT_LAST_WILL(Frame) ->
     ?DEBUG("~p", [Result]),
 
 %Topic,Payload,Qos,Retain all are list
-    case string:tokens(Detail_message_of_MQTT_LAST_WILL, "|") of
+%todo:make sure:qos is integer, qos is true or false
+    Details = case string:tokens(Detail_message_of_MQTT_LAST_WILL, "|") of
         [Topic, Payload, Qos, Retain] ->
             Is_topic = is_list(Topic),
             Is_payload = is_list(Payload),
@@ -1184,17 +1174,13 @@ get_detail_message_of_MQTT_LAST_WILL(Frame) ->
              ?DEBUG("~p",[Is_topic]),
              ?DEBUG("~p",[Is_payload]),
              ?DEBUG("~p",[Is_qos]),
-             ?DEBUG("~p",[Is_retain]);
+             ?DEBUG("~p",[Is_retain]),
+             {Topic, Payload, Qos, Retain};
         _Else ->
-        ?DEBUG("Analysis MQTT_LAST_WILL payload erro, wrong formate of payload:~p", [Detail_message_of_MQTT_LAST_WILL])
+        ?DEBUG("Analysis MQTT_LAST_WILL payload erro, wrong formate of payload:~p", [Detail_message_of_MQTT_LAST_WILL]),
+        wrong
     end,
-    ?DEBUG_MSG("ok"),
-
-
-
-
-
-    {Detail_message_of_MQTT_LAST_WILL}.
+    Details.
 
 
 
