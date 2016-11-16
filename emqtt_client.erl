@@ -1211,34 +1211,17 @@ check_wether_MQTT_LAST_WILL_enable(Uid, Appkey) ->
     ?DEBUG("Wether_MQTT_LAST_WILL_enable:~p", [Wether_MQTT_LAST_WILL_enable]),
     Wether_MQTT_LAST_WILL_enable.
                
-send_MQTT_LAST_WILL_message(State = #state{appkey = Appkey, uid = Uid , node_tag = Node_tag, protocol_version = Protocol_version, client_id = Client_id}) ->
-    Unique_id = lists:concat([Appkey, Uid]),
-    {ok, Topic} = eredis_pool:q(pool1, ["HGET", Unique_id, "topic"]),
-    {ok, Payload} = eredis_pool:q(pool1, ["HGET", Unique_id, "payload"]),
-    {ok, Qos} = eredis_pool:q(pool1, ["HGET", Unique_id, "qos"]),
-    {ok, Retain} = eredis_pool:q(pool1, ["HGET", Unique_id, "retain"]),
+send_MQTT_LAST_WILL_message(State) ->
+    {Topic, Payload, Qos, Retain} = get_MQTT_LAST_WILL_message_from_redis(State),
+    ?DEBUG_MSG("here"),
 
-    ?DEBUG("~p",[Unique_id]),
-    ?DEBUG("~p",[Topic]),
-    ?DEBUG("~p",[Payload]),
-    ?DEBUG("~p",[Qos]),
-    ?DEBUG("~p",[Retain]),
+    forward_MQTT_LAST_WILL_package_to_mq(Topic, Payload, Qos, Retain, State),
 
-    Topic_in_list = binary_to_list(Topic),
-    Qos_in_integer = binary_to_integer(Qos),
-    Retain_in_atom = binary_to_atom(Retain, latin1),
-    ?DEBUG("~p",[Topic_in_list]),
-    ?DEBUG("~p",[Qos_in_integer]),
-    ?DEBUG("~p",[Retain_in_atom]),
+
 
 
 %%todo:change type, <<"3">> to variable
-    Mqtt_frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = 3, dup = false, qos = Qos_in_integer, retain = Retain_in_atom}, 
-                             variable = #mqtt_frame_publish{topic_name = Topic_in_list, message_id = 12407714287953586446},
-                             payload = Payload},
-    FrameBytes = emqtt_frame:serialise(Mqtt_frame, Protocol_version),
-    Result = forward_package_to_mq(Node_tag, Protocol_version, Uid, Client_id, FrameBytes, <<"3">>, State),
-    ?DEBUG("~p", [Result]),
+
     % Mq_package = make_package_send_to_mq(State),
     send_packege.
 
@@ -1252,3 +1235,44 @@ send_MQTT_LAST_WILL_message(State = #state{appkey = Appkey, uid = Uid , node_tag
 %     FrameBytes2 = emqtt_frame:serialise(Mqtt_frame, 19),
 %     ?DEBUG("~p", [Key]),
 %     forward_package_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes2, Key, State).
+
+get_MQTT_LAST_WILL_message_from_redis(State = #state{appkey = Appkey, uid = Uid}) ->
+
+?DEBUG_MSG("here"),
+    Unique_id = lists:concat([Appkey, Uid]),
+    {ok, Topic} = eredis_pool:q(pool1, ["HGET", Unique_id, "topic"]),
+    {ok, Payload} = eredis_pool:q(pool1, ["HGET", Unique_id, "payload"]),
+    {ok, Qos} = eredis_pool:q(pool1, ["HGET", Unique_id, "qos"]),
+    {ok, Retain} = eredis_pool:q(pool1, ["HGET", Unique_id, "retain"]),
+?DEBUG_MSG("here"),
+
+    {ok, Delte_success} = eredis_pool:q(pool1, ["DEL", Unique_id]),
+?DEBUG_MSG("here"),
+
+    ?DEBUG("~p",[Unique_id]),
+    ?DEBUG("~p",[Topic]),
+    ?DEBUG("~p",[Payload]),
+    ?DEBUG("~p",[Qos]),
+    ?DEBUG("~p",[Retain]),
+
+    Topic_in_list = binary_to_list(Topic),
+    Qos_in_integer = binary_to_integer(Qos),
+    Retain_in_atom = binary_to_atom(Retain, latin1),
+    ?DEBUG("~p",[Topic_in_list]),
+    ?DEBUG("~p",[Qos_in_integer]),
+    ?DEBUG("~p",[Retain_in_atom]),
+?DEBUG_MSG("here"),
+
+    {Topic_in_list, f, Qos_in_integer, Retain_in_atom}.
+
+forward_MQTT_LAST_WILL_package_to_mq(Topic, Payload, Qos, Retain, State = #state{uid = Uid , node_tag = Node_tag, protocol_version = Protocol_version, client_id = Client_id})->
+    Mqtt_frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = 3, dup = false, qos = Qos, retain = Retain}, 
+                             variable = #mqtt_frame_publish{topic_name = Topic, message_id = 12407714287953586446},
+                             payload = Payload},
+    FrameBytes = emqtt_frame:serialise(Mqtt_frame, Protocol_version),
+
+    ?DEBUG_MSG("here"),
+
+    Result = forward_package_to_mq(Node_tag, Protocol_version, Uid, Client_id, FrameBytes, <<"3">>, State),
+    %%todo:what if forward_package failt?? learn it from other place.
+    ?DEBUG("~p", [Result]).
