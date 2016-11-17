@@ -111,12 +111,12 @@ emqtt_client_unregister({ClientId, Uid}, Pid, Reason, State) ->
                             ignore;
                           _ ->
                           %%todo:last will would work only if client disconnect brutly rather gentely
-                            case check_wether_MQTT_LAST_WILL_enable(Uid, State#state.appkey) of
-                                true ->
-                                    send_MQTT_LAST_WILL_message(State);
-                                false ->
-                                    ignore
-                            end,
+                            % case check_wether_MQTT_LAST_WILL_enable(Uid, State#state.appkey) of
+                            %     true ->
+                            %         send_MQTT_LAST_WILL_message(State);
+                            %     false ->
+                            %         ignore
+                            % end,
                             forward_package_disconnect_to_mq(State)
                         end;
                       true ->
@@ -341,6 +341,13 @@ handle_info(keep_alive_timeout, #state{keep_alive = KeepAlive} = State) ->
     case TimerState of
         idle ->
             ?INFO("keep_alive timeout: ~p", [State#state.client_id]),
+            case check_wether_MQTT_LAST_WILL_enable(State#state.uid, State#state.appkey) of
+                true ->
+                    ?DEBUG_MSG("timeout,start send MQTT_LAST_WILL"),
+                    send_MQTT_LAST_WILL_message(State);
+                false ->
+                    ignore
+            end,
             {stop, normal, State};
         active ->
             KeepAlive1 = emqtt_keep_alive:reset(KeepAlive),
@@ -608,6 +615,8 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
                               _ ->
                                   ignore
                           end,
+                          ?DEBUG("~p", [Ret1]),
+                        ?DEBUG("~p", [State5]),
                           {Ret1,State5};
                         false ->
                             case Wether_command_message_of_MQTT_LAST_WILL of
@@ -615,7 +624,8 @@ process_frame(_Bytes, Frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = Type}
                                     ?DEBUG_MSG("start store last will message"),
                                     store_MQTT_LAST_WILL_command_in_redis(Frame, State3),
                                     % make_package_send_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
-                                    {stop, State3#state{keep_alive = KeepAlive1}};
+                                    % {stop, State3#state{keep_alive = KeepAlive1}};
+                                    {ok, State3#state{keep_alive = KeepAlive1, await_recv = false}};
                                 false ->
                                     forward_package_to_mq(NodeTag, ProtocolVersion, Uid2, ClientId, FrameBytes, Key, State3),
                                     {ok, State3#state{keep_alive = KeepAlive1}}
@@ -1245,7 +1255,7 @@ get_MQTT_LAST_WILL_message_from_redis(State = #state{appkey = Appkey, uid = Uid}
     {ok, Qos} = eredis_pool:q(pool1, ["HGET", Unique_id, "qos"]),
     {ok, Retain} = eredis_pool:q(pool1, ["HGET", Unique_id, "retain"]),
 ?DEBUG_MSG("here"),
-
+%todo :what if delete failed??
     {ok, Delte_success} = eredis_pool:q(pool1, ["DEL", Unique_id]),
 ?DEBUG_MSG("here"),
 
@@ -1263,12 +1273,14 @@ get_MQTT_LAST_WILL_message_from_redis(State = #state{appkey = Appkey, uid = Uid}
     ?DEBUG("~p",[Retain_in_atom]),
 ?DEBUG_MSG("here"),
 
-    {Topic_in_list, f, Qos_in_integer, Retain_in_atom}.
+    {Topic_in_list, Payload, Qos_in_integer, Retain_in_atom}.
 
 forward_MQTT_LAST_WILL_package_to_mq(Topic, Payload, Qos, Retain, State = #state{uid = Uid , node_tag = Node_tag, protocol_version = Protocol_version, client_id = Client_id})->
+%%message_id ???????
     Mqtt_frame = #mqtt_frame{fixed = #mqtt_frame_fixed{type = 3, dup = false, qos = Qos, retain = Retain}, 
                              variable = #mqtt_frame_publish{topic_name = Topic, message_id = 12407714287953586446},
                              payload = Payload},
+    ?DEBUG("~p", [Mqtt_frame]),
     FrameBytes = emqtt_frame:serialise(Mqtt_frame, Protocol_version),
 
     ?DEBUG_MSG("here"),
